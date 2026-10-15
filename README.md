@@ -1,9 +1,12 @@
 # poste
 
 Local search and management layer over [Proton Mail exports](https://proton.me/support/proton-mail-export-tool).
-Single Rust binary + one SQLite file. No server, no daemon. Designed so an
-agent harness (opencode, oh-my-pi) is the primary UX via the CLI contract;
-humans use the same CLI directly.
+Single Rust binary + one SQLite file. No server, no daemon, no network
+calls. Designed so an agent harness (opencode, oh-my-pi) is the primary UX
+via the CLI contract; humans use the same CLI directly. An intended use case
+is pairing it with a local LLM (Ollama, llama.cpp, …) so a model can search
+and manage your mail entirely on your machine — see
+[Local LLM use case](#local-llm-use-case).
 
 **Status:** Phase 0–2 complete (ingest, keyword search, attachments). See `PLAN.md`.
 
@@ -43,8 +46,25 @@ poste search invoice --from vultr --json
 poste show --body -- -XYZ987==        # IDs often start with '-': pass '--' first
 ```
 
-For agent harnesses: prefer `--json` everywhere, chain `search` → `show`/`attach get`
-via the Proton internal `id` in each result row. See "CLI contract" below.
+For agent harnesses — including a local LLM (see below) — prefer `--json`
+everywhere and chain `search` → `show`/`attach get` via the Proton internal
+`id` in each result row. See "CLI contract" below.
+
+## Local LLM use case
+
+The point of poste: a local model can search your mail, read messages, and
+pull attachments without a byte of your mail leaving your machine.
+
+- **Network-free.** The binary makes no network requests (no HTTP client
+  dependency; see `Cargo.toml`). The only networked step is the official
+  Proton export tool, which you run interactively — your Proton credentials
+  never touch poste or the model.
+- **The model sees only CLI output.** It queries with `search --json`, reads
+  with `show --body`, extracts with `attach get` — per the
+  [CLI contract](#cli-contract-for-agents). No LLM provider is in the loop.
+- **Data stays under your archive root.** The index contains full body text,
+  so keep it private (chmod 700, never commit or sync it) — see
+  [How it works](#how-it-works).
 
 ## Common operations
 
