@@ -1,0 +1,25 @@
+/target
+*.db
+*.db-wal
+*.db-shm
+
+# Email data must never be committed: raw exports, canonical store, fixtures
+# containing real mail, or any local archive copies.
+export/
+export-*/
+mail_*/
+canonical/
+*.eml
+*.emlx
+*.mbox
+labels.json
+metadata.json
+
+# Allow the synthetic (non-sensitive) fixture export used by tests.
+!fixtures/**
+
+# Personal search-quality eval notes from the live archive must never be committed.
+eval/
+
+# Agent-harness local state (audit logs contain local paths).
+.opencode/

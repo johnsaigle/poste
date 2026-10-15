@@ -1,0 +1,18 @@
+From: CI Bot <ci@ci.example>
+To: Me <me@proton.example>
+Subject: Deployment broken on staging
+Date: Mon, 1 Apr 2024 00:00:00 +0000
+Message-ID: <deploy-1@ci.example>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="FIXTUREBOUNDARY"
+
+--FIXTUREBOUNDARY
+Content-Type: text/html; charset=utf-8
+
+<html><body><p>The <b>staging</b> deployment failed at 03:00 UTC.</p></body></html>
+--FIXTUREBOUNDARY
+Content-Type: application/pdf; name="report.pdf"
+Content-Disposition: attachment; filename="report.pdf"
+
+%PDF-1.4 fixture attachment bytes
+--FIXTUREBOUNDARY--
