@@ -7,6 +7,45 @@ humans use the same CLI directly.
 
 **Status:** Phase 0–2 complete (ingest, keyword search, attachments). See `PLAN.md`.
 
+## Recipes
+
+If your task looks like one of these, poste is the right tool. The full flag
+surface is small: `search` filters by sender, recipient, date range, label, and
+attachment presence; `attach` filters by sender and extension.
+
+```sh
+# ── "What did I pay for?" — find invoices from a vendor
+poste search invoice --from vultr
+poste search receipt --from stripe --after 2025-01-01 --json
+
+# ── "Collect every PDF my accountant sent me" — preview, then extract
+poste attach get --from accountant --ext pdf --out ~/taxes/2025/ --dry-run
+poste attach get --from accountant --ext pdf --out ~/taxes/2025/
+
+# ── "What did my manager say about the rewrite?" — bounded date-range search
+poste search rewrite --from boss@corp.com --after 2025-03-01 --before 2025-06-01 --limit 50
+
+# ── "Find that email I half-remember" — quoted phrases match exactly
+poste search "deployment broken on friday"
+
+# ── "Which services reset my password or registered me recently?" — security audit
+poste search "password reset" --after 2025-10-01
+poste search "verify your email" --limit 20
+
+# ── "Everything filed under Tax last year, with attachments"
+poste search receipt --label Tax --after 2025-01-01 --before 2026-01-01 --has-attachment
+
+# ── "What attachments exist in my mail at all?" — inventory, most recent first
+poste attach list --ext pdf --limit 50 --json
+
+# ── "Read one message in full" — search returns IDs, show takes one
+poste search invoice --from vultr --json
+poste show --body -- -XYZ987==        # IDs often start with '-': pass '--' first
+```
+
+For agent harnesses: prefer `--json` everywhere, chain `search` → `show`/`attach get`
+via the Proton internal `id` in each result row. See "CLI contract" below.
+
 ## Common operations
 
 ```sh
