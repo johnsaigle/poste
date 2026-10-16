@@ -95,7 +95,7 @@ poste ingest --latest
 # Health & stats
 poste stats
 poste doctor
-poste config   # show resolved archive root + config file location
+poste config   # resolved root, config file, latest export + last ingest time
 
 # Or via make (uses the configured root)
 make index
@@ -168,8 +168,9 @@ root = "~/Documents/email-backup"
 
 Point `root` at the same directory you gave the Proton export tool as its
 custom export location — poste looks for `<root>/<account>/mail_<ts>/`
-exports and writes `canonical/` + `index.db` there. Check the resolved
-values any time with `poste config`.
+exports and writes `canonical/` + `index.db` there. `poste config` also
+shows the newest export under the root (parsed from the `mail_<ts>` name),
+so you can tell at a glance whether your data is fresh.
 
 ## CLI contract (for agents)
 

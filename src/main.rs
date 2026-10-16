@@ -203,6 +203,8 @@ fn main() -> Result<()> {
                 )
             );
             println!("archive root: {}", root.display());
+            show_latest_export(&root);
+            show_last_ingest(&root);
         }
     }
     Ok(())
@@ -212,6 +214,52 @@ fn ts_to_date(ts: i64) -> String {
     chrono::DateTime::from_timestamp(ts, 0)
         .map(|d| d.format("%Y-%m-%d").to_string())
         .unwrap_or_default()
+}
+
+/// Print the newest `mail_<ts>` export under the root and when it was taken.
+fn show_latest_export(root: &Path) {
+    let Ok(latest) = ingest::find_latest_export(root) else {
+        println!("latest export: (none found under archive root)");
+        return;
+    };
+    let when = ingest::export_timestamp(&latest)
+        .and_then(|ts| chrono::DateTime::from_timestamp(ts, 0))
+        .map_or_else(
+            || "unknown time".to_string(),
+            |d| d.format("%Y-%m-%d %H:%M UTC").to_string(),
+        );
+    println!("latest export: {}", latest.display());
+    println!("export time: {when}");
+}
+
+/// Print when the index was last ingested, and from which export.
+fn show_last_ingest(root: &Path) {
+    if !root.join("index.db").exists() {
+        println!("last ingest: (no index — run `poste ingest --latest`)");
+        return;
+    }
+    let Ok(conn) = db::open(root) else {
+        println!("last ingest: (index unreadable)");
+        return;
+    };
+    let at = db::get_meta(&conn, "last_ingest_at").ok().flatten();
+    let from = db::get_meta(&conn, "last_ingest_export").ok().flatten();
+    let Some(at) = at else {
+        println!("last ingest: (not recorded — ingest to record)");
+        return;
+    };
+    let when = at
+        .parse::<i64>()
+        .ok()
+        .and_then(|ts| chrono::DateTime::from_timestamp(ts, 0))
+        .map_or_else(
+            || at.clone(),
+            |d| d.format("%Y-%m-%d %H:%M UTC").to_string(),
+        );
+    match from {
+        Some(dir) => println!("last ingest: {when} (from {dir})"),
+        None => println!("last ingest: {when}"),
+    }
 }
 
 fn run_attach(root: &Path, cmd: AttachCmd) -> Result<()> {

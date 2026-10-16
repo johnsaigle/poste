@@ -44,6 +44,10 @@ fn init_schema(conn: &Connection) -> Result<()> {
           id TEXT PRIMARY KEY,
           name TEXT
         );
+        CREATE TABLE IF NOT EXISTS meta (
+          key TEXT PRIMARY KEY,
+          value TEXT
+        );
         CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
           subject, body_text, sender_addr, tokenize='porter'
         );
@@ -52,6 +56,21 @@ fn init_schema(conn: &Connection) -> Result<()> {
         ",
     )?;
     Ok(())
+}
+
+pub fn set_meta(conn: &Connection, key: &str, value: &str) -> Result<()> {
+    conn.execute(
+        "INSERT INTO meta (key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        [key, value],
+    )?;
+    Ok(())
+}
+
+pub fn get_meta(conn: &Connection, key: &str) -> Result<Option<String>> {
+    let mut stmt = conn.prepare("SELECT value FROM meta WHERE key = ?1")?;
+    let mut rows = stmt.query([key])?;
+    Ok(rows.next()?.map(|r| r.get(0)).transpose()?)
 }
 
 /// Load the sqlite-vec extension (Phase 3). Optional: failure is not fatal,

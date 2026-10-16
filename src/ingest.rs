@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 use rusqlite::Connection;
 use walkdir::WalkDir;
 
+use crate::db;
 use crate::metadata::{attachment_fields, parse_labels, parse_metadata, sanitize_id_component};
 use crate::text::extract_body;
 
@@ -33,6 +34,28 @@ pub fn find_latest_export(root: &Path) -> Result<std::path::PathBuf> {
     }
     candidates.sort();
     candidates.pop().context("no mail_<ts> export dirs found under archive root")
+}
+
+/// Parse the timestamp encoded in a `mail_YYYYMMDD_HHMMSS` directory name.
+pub fn export_timestamp(dir: &Path) -> Option<i64> {
+    let name = dir.file_name()?.to_str()?;
+    let ts = name.strip_prefix("mail_")?;
+    chrono::NaiveDateTime::parse_from_str(ts, "%Y%m%d_%H%M%S")
+        .ok()
+        .map(|dt| dt.and_utc().timestamp())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_export_timestamp() {
+        let p = Path::new("/root/account/mail_20261009_070548");
+        assert_eq!(export_timestamp(p), Some(1791529548));
+        assert_eq!(export_timestamp(Path::new("/root/canonical")), None);
+        assert_eq!(export_timestamp(Path::new("/root/a/mail_abc")), None);
+    }
 }
 
 #[derive(Debug, Default, serde::Serialize)]
@@ -154,7 +177,18 @@ pub fn ingest(conn: &Connection, root: &Path, export_dir: &Path) -> Result<Inges
         }
     }
 
+    // Record ingest provenance for `poste config` freshness reporting.
+    record_ingest_meta(conn, export_dir)?;
+
     Ok(stats)
+}
+
+fn record_ingest_meta(conn: &Connection, export_dir: &Path) -> Result<()> {
+    db::set_meta(conn, "last_ingest_at", &chrono::Utc::now().timestamp().to_string())?;
+    if let Some(name) = export_dir.file_name().and_then(|n| n.to_str()) {
+        db::set_meta(conn, "last_ingest_export", name)?;
+    }
+    Ok(())
 }
 
 #[derive(Debug, serde::Serialize)]
