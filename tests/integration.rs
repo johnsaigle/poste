@@ -127,6 +127,9 @@ fn ingest_search_dedup_doctor() {
     let out = run(root, &["ingest", fixture_export().to_str().unwrap()]);
     assert!(out.contains("3 inserted"), "got: {out}");
     assert!(out.contains("1 attachments"), "got: {out}");
+    // Counts for files scanned and labels loaded must reflect reality, not 0.
+    assert!(out.contains("scanned 3 metadata files"), "got: {out}");
+    assert!(out.contains("4 labels"), "got: {out}");
 
     // Canonical store has the .eml files, including the leading-dash ID
     assert!(root.join("canonical/AA/AAAabc123==.eml").exists());
@@ -399,6 +402,41 @@ fn search_total_limit_before_and_label_fallback() {
 }
 
 #[test]
+fn search_empty_query_is_filter_only() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let export = tmp.path().join("export");
+    write_msg(
+        &export,
+        "PLAIN1==",
+        "alpha",
+        "alpha",
+        "a@x.example",
+        1_735_689_600,
+        &[],
+    );
+    write_msg_with_attachment(&export, "ATT1====", "report.pdf", b"x", true);
+    run(root, &["ingest", export.to_str().unwrap()]);
+
+    // A whitespace-only query with no filters is degenerate: fail with a
+    // clear message, never with a raw FTS5 syntax error and never by
+    // degenerating into "match everything".
+    let (_stdout, stderr) = run_fail(root, &["search", ""]);
+    assert!(stderr.contains("provide a search term"), "got: {stderr}");
+    let (_stdout, stderr) = run_fail(root, &["search", "   "]);
+    assert!(stderr.contains("provide a search term"), "got: {stderr}");
+
+    // Filter-only search: no keyword, but --has-attachment narrows the set.
+    let out = run(root, &["search", "   ", "--has-attachment", "--json"]);
+    assert!(out.contains("ATT1===="), "filter-only search missed the hit: {out}");
+    assert!(
+        !out.contains("PLAIN1=="),
+        "filter-only search leaked a non-attachment: {out}"
+    );
+    assert!(out.contains("\"total\": 1"), "got: {out}");
+}
+
+#[test]
 fn show_missing_id_exits_nonzero() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
@@ -406,6 +444,67 @@ fn show_missing_id_exits_nonzero() {
     let (stdout, stderr) = run_fail(root, &["show", "--", "NOSUCHID=="]);
     assert!(stdout.is_empty(), "got: {stdout}");
     assert!(stderr.contains("no message with id"), "got: {stderr}");
+}
+
+#[test]
+fn short_id_aliases_search_show_and_attach() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    run(root, &["ingest", fixture_export().to_str().unwrap()]);
+
+    // Search JSON carries a short alias next to the full Proton ID.
+    let out = run(root, &["search", "staging", "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let hit = &v["hits"][0];
+    let short_id = hit["short_id"].as_str().unwrap();
+    assert!(short_id.starts_with('m') && short_id.len() <= 12, "got: {short_id}");
+    assert_ne!(hit["id"].as_str().unwrap(), short_id);
+    // A keyword search includes a body snippet.
+    let snippet = hit["snippet"].as_str().unwrap();
+    assert!(snippet.contains("<<"), "snippet lacks match markers: {snippet}");
+
+    // `show` resolves the short alias to the same message as the full ID.
+    let full_id = hit["id"].as_str().unwrap();
+    let by_full = run(root, &["show", "--json", "--", full_id]);
+    let by_short = run(root, &["show", "--json", "--", short_id]);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&by_full).unwrap()["id"],
+        serde_json::from_str::<serde_json::Value>(&by_short).unwrap()["id"]
+    );
+
+    // Filter-only (no MATCH) searches have no snippet, and attach rows
+    // carry the alias too.
+    let out = run(root, &["search", "   ", "--has-attachment", "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["hits"][0]["snippet"].as_str().unwrap(), "");
+    let out = run(root, &["attach", "list", "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v[0]["short_id"].as_str().unwrap(), short_id);
+
+    // Legacy path keeps working: full Proton IDs still resolve.
+    assert!(run(root, &["show", "--json", "--", full_id]).contains(full_id));
+}
+
+#[test]
+fn short_id_backfills_legacy_index_without_column() {
+    // Simulate a pre-alias index: ingest with the current binary, then drop
+    // the column contents to mimic a legacy DB and reopen — the migration
+    // must backfill aliases so `show` keeps resolving them.
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    run(root, &["ingest", fixture_export().to_str().unwrap()]);
+
+    let db = rusqlite::Connection::open(root.join("index.db")).unwrap();
+    db.execute("UPDATE messages SET short_id = NULL", []).unwrap();
+
+    // Re-running the binary (any command that opens the DB) must restore
+    // aliases, and `show` by alias must work again afterwards.
+    run(root, &["stats"]);
+    let out = run(root, &["search", "staging", "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let short_id = v["hits"][0]["short_id"].as_str().unwrap().to_string();
+    assert!(short_id.starts_with('m'), "backfill missing: {short_id}");
+    run(root, &["show", "--", &short_id]);
 }
 
 #[test]
@@ -468,6 +567,62 @@ fn ingest_twice_is_stable_in_db_and_canonical_bytes() {
         let dst = std::fs::read(root.join("canonical").join(&first2).join(name)).unwrap();
         assert_eq!(src, dst, "canonical bytes differ for {name}");
     }
+}
+
+#[test]
+fn config_reports_latest_export_and_last_ingest() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    // A real account export under the root so `config` can find + date it.
+    let export = root.join("me@x.example/mail_20250601_120000");
+    std::fs::create_dir_all(&export).unwrap();
+    for entry in std::fs::read_dir(fixture_export()).unwrap().flatten() {
+        std::fs::copy(entry.path(), export.join(entry.file_name())).unwrap();
+    }
+    run(root, &["ingest", "--latest"]);
+
+    let out = run(root, &["config"]);
+    // Freshness reporting: the newest export and its encoded timestamp.
+    assert!(
+        out.contains(&format!("latest export: {}", export.display())),
+        "latest export not reported: {out}"
+    );
+    assert!(out.contains("export time: 2025-06-01 12:00 UTC"), "got: {out}");
+
+    // Last-ingest provenance must actually be recorded (meta round-trip) and
+    // rendered as a real timestamp, not an empty/placeholder string.
+    assert!(out.contains("last ingest: 20"), "timestamp not rendered: {out}");
+    assert!(
+        out.contains("(from mail_20250601_120000)"),
+        "ingest provenance lost: {out}"
+    );
+
+    // Human `stats` renders the date range (ts_to_date), not blank dates.
+    let out = run(root, &["stats"]);
+    assert!(out.contains("2024-03-31"), "oldest date missing: {out}");
+    assert!(out.contains("2024-04-02"), "newest date missing: {out}");
+}
+
+#[test]
+fn no_spurious_vec_extension_warning() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    run(root, &["ingest", fixture_export().to_str().unwrap()]);
+    let out = Command::new(exe())
+        .arg("--root")
+        .arg(root)
+        .args(["stats"])
+        .env_remove("POSTE_CONFIG")
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "stats failed");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    // sqlite-vec registers successfully here; a warning means the success
+    // check was inverted.
+    assert!(
+        !stderr.contains("could not register sqlite-vec"),
+        "spurious vec warning: {stderr}"
+    );
 }
 
 #[test]

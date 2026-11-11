@@ -57,7 +57,7 @@ enum Cmd {
         #[command(subcommand)]
         cmd: AttachCmd,
     },
-    /// Show a single message by Proton internal ID
+    /// Show a single message by short alias (m<rowid>) or full Proton ID
     Show {
         id: String,
         #[arg(long)]
@@ -140,13 +140,7 @@ fn main() -> Result<()> {
             if json {
                 println!("{}", serde_json::to_string_pretty(&res)?);
             } else {
-                for h in &res.hits {
-                    let date = chrono::DateTime::from_timestamp(h.time, 0)
-                        .map(|d| d.format("%Y-%m-%d").to_string())
-                        .unwrap_or_default();
-                    println!("{}\t{}\t{}\t{}", date, h.sender_addr, h.id, h.subject);
-                }
-                println!("-- {} of {} hit(s)", res.hits.len(), res.total);
+                print_search_results(&res);
             }
         }
         Cmd::Attach { cmd } => run_attach(&root, cmd)?,
@@ -156,7 +150,7 @@ fn main() -> Result<()> {
                 if json {
                     println!("{}", serde_json::to_string_pretty(&m)?);
                 } else {
-                    println!("id: {}\nfrom: {} <{}>\nsubject: {}", m.id, m.sender_name, m.sender_addr, m.subject);
+                    println!("id: {} (alias {})\nfrom: {} <{}>\nsubject: {}", m.id, m.short_id, m.sender_name, m.sender_addr, m.subject);
                     if body {
                         println!("\n{}", m.body_text);
                     }
@@ -216,6 +210,20 @@ fn ts_to_date(ts: i64) -> String {
         .unwrap_or_default()
 }
 
+/// Human TSV output: date, sender, short id, subject, snippet (when a
+/// keyword search ran). Snippet newlines are flattened for TSV safety.
+fn print_search_results(res: &search::SearchResult) {
+    for h in &res.hits {
+        let date = ts_to_date(h.time);
+        print!("{}\t{}\t{}\t{}", date, h.sender_addr, h.short_id, h.subject);
+        if !h.snippet.is_empty() {
+            print!("\t{}", h.snippet.replace(['\n', '\r', '\t'], " "));
+        }
+        println!();
+    }
+    println!("-- {} of {} hit(s)", res.hits.len(), res.total);
+}
+
 /// Print the newest `mail_<ts>` export under the root and when it was taken.
 fn show_latest_export(root: &Path) {
     let Ok(latest) = ingest::find_latest_export(root) else {
@@ -271,7 +279,7 @@ fn run_attach(root: &Path, cmd: AttachCmd) -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&rows)?);
             } else {
                 for r in &rows {
-                    println!("{}\t{}\t{}\t{}", r.message_id, r.size, r.mime_type, r.filename);
+                    println!("{}\t{}\t{}\t{}", r.short_id, r.size, r.mime_type, r.filename);
                 }
                 println!("-- {} attachment(s)", rows.len());
             }
@@ -290,7 +298,7 @@ fn run_attach(root: &Path, cmd: AttachCmd) -> Result<()> {
             } else {
                 for f in &files {
                     let verb = if dry_run { "would write" } else { "wrote" };
-                    println!("{verb} {} -> {}", f.message_id, f.path);
+                    println!("{verb} {} (from {}) -> {}", f.filename, f.message_id, f.path);
                 }
                 if dry_run {
                     println!("-- dry run: {} file(s) planned", files.len());

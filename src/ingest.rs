@@ -32,7 +32,10 @@ pub fn find_latest_export(root: &Path) -> Result<std::path::PathBuf> {
             }
         }
     }
-    candidates.sort();
+    // Order by the encoded export timestamp, not the full path: path
+    // ordering is lexicographic over `<account>/mail_<ts>`, so an account
+    // directory name would outrank the timestamp across accounts.
+    candidates.sort_by_key(|p| export_timestamp(p).unwrap_or(i64::MIN));
     candidates.pop().context("no mail_<ts> export dirs found under archive root")
 }
 
@@ -55,6 +58,42 @@ mod tests {
         assert_eq!(export_timestamp(p), Some(1791529548));
         assert_eq!(export_timestamp(Path::new("/root/canonical")), None);
         assert_eq!(export_timestamp(Path::new("/root/a/mail_abc")), None);
+    }
+
+    #[test]
+    fn latest_export_ignores_files_and_canonical() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        // A real account export.
+        std::fs::create_dir_all(root.join("acct@x.example/mail_20250101_000000")).unwrap();
+        // A stray regular file whose name looks like an export and sorts
+        // AFTER the real one — must never be selected.
+        std::fs::write(root.join("acct@x.example/mail_99999999_000000"), b"x").unwrap();
+        // The canonical store is not an account even if it holds a
+        // mail_-shaped dir that sorts after the real export.
+        std::fs::create_dir_all(root.join("canonical/mail_99999999_000000")).unwrap();
+
+        assert_eq!(
+            find_latest_export(root).unwrap(),
+            root.join("acct@x.example/mail_20250101_000000")
+        );
+    }
+
+    // Regression for a real bug: `find_latest_export` sorted full paths, so an
+    // account directory name could outrank the `mail_<ts>` timestamp. When the
+    // alphabetically-last account holds the OLDER export, `--latest` picked the
+    // wrong one. The sort now keys on the timestamp.
+    #[test]
+    fn latest_export_orders_by_timestamp_across_accounts() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("a@x.example/mail_20241231_000000")).unwrap();
+        std::fs::create_dir_all(root.join("z@x.example/mail_20240101_000000")).unwrap();
+        assert_eq!(
+            find_latest_export(root).unwrap(),
+            root.join("a@x.example/mail_20241231_000000"),
+            "the newest export must win by timestamp, not by account name"
+        );
     }
 }
 
@@ -154,6 +193,13 @@ pub fn ingest(conn: &Connection, root: &Path, export_dir: &Path) -> Result<Inges
         }
         stats.inserted += 1;
 
+        // Short stable alias for agent chaining: 'm<rowid>'. Computed once
+        // here; rowids are stable because rows are never deleted.
+        conn.execute(
+            "UPDATE messages SET short_id = ?1 WHERE id = ?2",
+            rusqlite::params![format!("m{}", conn.last_insert_rowid()), id],
+        )?;
+
         let msg_rowid = conn.last_insert_rowid();
         conn.execute(
             "INSERT INTO messages_fts (rowid, subject, body_text, sender_addr)
@@ -166,21 +212,32 @@ pub fn ingest(conn: &Connection, root: &Path, export_dir: &Path) -> Result<Inges
             ],
         )?;
 
-        for (idx, att) in meta.payload.attachments.iter().enumerate() {
-            let (filename, mime, size) = attachment_fields(att);
-            conn.execute(
-                "INSERT INTO attachments (message_id, part_idx, filename, mime_type, size)
-                 VALUES (?1,?2,?3,?4,?5)",
-                rusqlite::params![id, i64::try_from(idx).unwrap_or_default(), filename, mime, size],
-            )?;
-            stats.attachments += 1;
-        }
+        insert_attachments(conn, &id, &meta.payload.attachments, &mut stats)?;
     }
 
     // Record ingest provenance for `poste config` freshness reporting.
     record_ingest_meta(conn, export_dir)?;
 
     Ok(stats)
+}
+
+/// Insert the attachment rows for one message.
+fn insert_attachments(
+    conn: &Connection,
+    id: &str,
+    attachments: &[serde_json::Value],
+    stats: &mut IngestStats,
+) -> Result<()> {
+    for (idx, att) in attachments.iter().enumerate() {
+        let (filename, mime, size) = attachment_fields(att);
+        conn.execute(
+            "INSERT INTO attachments (message_id, part_idx, filename, mime_type, size)
+             VALUES (?1,?2,?3,?4,?5)",
+            rusqlite::params![id, i64::try_from(idx).unwrap_or_default(), filename, mime, size],
+        )?;
+        stats.attachments += 1;
+    }
+    Ok(())
 }
 
 fn record_ingest_meta(conn: &Connection, export_dir: &Path) -> Result<()> {

@@ -10,6 +10,8 @@ use crate::metadata::sanitize_filename;
 #[derive(Debug, serde::Serialize)]
 pub struct AttachRow {
     pub message_id: String,
+    /// Short stable alias of the owning message — prefer this for chaining.
+    pub short_id: String,
     pub part_idx: i64,
     pub filename: String,
     pub mime_type: String,
@@ -26,7 +28,7 @@ pub struct AttachFilters {
 /// returned SQL references them as ?N positionally.
 fn select_sql(f: &AttachFilters, params: &mut Vec<Box<dyn rusqlite::types::ToSql>>) -> String {
     let mut sql = String::from(
-        "SELECT a.message_id, a.part_idx, a.filename, a.mime_type, a.size, m.eml_path
+        "SELECT a.message_id, m.short_id, a.part_idx, a.filename, a.mime_type, a.size, m.eml_path
          FROM attachments a JOIN messages m ON m.id = a.message_id WHERE 1=1",
     );
     if let Some(from) = &f.from {
@@ -57,12 +59,13 @@ fn query_rows(conn: &Connection, f: &AttachFilters) -> Result<Vec<(AttachRow, St
         Ok((
             AttachRow {
                 message_id: r.get(0)?,
-                part_idx: r.get(1)?,
-                filename: r.get(2)?,
-                mime_type: r.get(3)?,
-                size: r.get(4)?,
+                short_id: r.get(1)?,
+                part_idx: r.get(2)?,
+                filename: r.get(3)?,
+                mime_type: r.get(4)?,
+                size: r.get(5)?,
             },
-            r.get::<_, String>(5)?,
+            r.get::<_, String>(6)?,
         ))
     })?;
     let mut out = Vec::new();
@@ -81,10 +84,11 @@ pub fn list(conn: &Connection, f: &AttachFilters, limit: usize) -> Result<Vec<At
     let rows = stmt.query_map(refs.as_slice(), |r| {
         Ok(AttachRow {
             message_id: r.get(0)?,
-            part_idx: r.get(1)?,
-            filename: r.get(2)?,
-            mime_type: r.get(3)?,
-            size: r.get(4)?,
+            short_id: r.get(1)?,
+            part_idx: r.get(2)?,
+            filename: r.get(3)?,
+            mime_type: r.get(4)?,
+            size: r.get(5)?,
         })
     })?;
     let mut out = Vec::new();
@@ -223,6 +227,18 @@ mod tests {
         assert_eq!(unique_path(dir, "noext"), dir.join("noext"));
         std::fs::write(dir.join("noext"), b"x").unwrap();
         assert_eq!(unique_path(dir, "noext"), dir.join("noext-1"));
+    }
+
+    #[test]
+    fn dotfile_collision_keeps_leading_dot_as_stem() {
+        // A leading-dot name has an empty stem before the dot: rsplit_once('.')
+        // must NOT treat ".hidden" as (stem="", ext=".hidden"), or collisions
+        // would produce "-1.hidden" instead of ".hidden-1".
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        assert_eq!(unique_path(dir, ".hidden"), dir.join(".hidden"));
+        std::fs::write(dir.join(".hidden"), b"x").unwrap();
+        assert_eq!(unique_path(dir, ".hidden"), dir.join(".hidden-1"));
     }
 
     #[test]

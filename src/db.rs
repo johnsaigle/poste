@@ -18,6 +18,7 @@ fn init_schema(conn: &Connection) -> Result<()> {
         r"
         CREATE TABLE IF NOT EXISTS messages (
           id TEXT PRIMARY KEY,
+          short_id TEXT,
           external_id TEXT,
           subject TEXT,
           sender_name TEXT,
@@ -55,6 +56,41 @@ fn init_schema(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_attachments_message ON attachments(message_id);
         ",
     )?;
+
+    // Migration for indexes created before short_id existed:
+    // CREATE TABLE IF NOT EXISTS cannot add columns to an existing table.
+    let has_short_id: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('messages') WHERE name = 'short_id'",
+        [],
+        |r| r.get(0),
+    )?;
+    if has_short_id == 0 {
+        conn.execute_batch(
+            "ALTER TABLE messages ADD COLUMN short_id TEXT;
+             CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_short ON messages(short_id);",
+        )?;
+    } else {
+        // Fresh or already-migrated index: ensure the alias index exists.
+        conn.execute_batch(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_short ON messages(short_id);",
+        )?;
+    }
+    // Backfill any rows lacking an alias (legacy indexes, or rows written by
+    // an older binary). The IS NULL check is index-driven, so this is a
+    // no-op read for healthy indexes and writes only when needed. Rowids
+    // are stable: messages are never deleted or re-inserted (dedup by
+    // Proton ID), so 'm<rowid>' is a durable alias.
+    let missing: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM messages WHERE short_id IS NULL",
+        [],
+        |r| r.get(0),
+    )?;
+    if missing > 0 {
+        conn.execute(
+            "UPDATE messages SET short_id = 'm' || rowid WHERE short_id IS NULL",
+            [],
+        )?;
+    }
     Ok(())
 }
 
@@ -94,5 +130,23 @@ pub fn load_vec_extension() {
         if rc != 0 {
             eprintln!("warning: could not register sqlite-vec (rc={rc}); semantic search unavailable");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn loads_vec_extension() {
+        // Registration is global and idempotent; after it runs, a fresh
+        // connection must expose sqlite-vec's functions. If the extension is
+        // never registered, `vec_version()` does not exist and this fails.
+        load_vec_extension();
+        let conn = Connection::open_in_memory().unwrap();
+        let v: String = conn
+            .query_row("SELECT vec_version()", [], |r| r.get(0))
+            .expect("vec_version() missing — extension was not registered");
+        assert!(v.starts_with('v'), "unexpected sqlite-vec version: {v}");
     }
 }
