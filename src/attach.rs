@@ -251,7 +251,10 @@ Content-Disposition: attachment; filename=\"r.pdf\"\r\n\r\nPDFBYTES\r\n\
 --B--\r\n";
         let mail = parse_mail(eml).unwrap();
         let part = find_part(&mail, "r.pdf").unwrap();
-        assert_eq!(part.get_body_raw().unwrap(), b"PDFBYTES\r\n");
+        // RFC 2046 §5.1.1: the CRLF before a boundary belongs to the
+        // boundary, so the part body ends after "PDFBYTES"
+        // (mailparse 0.16 fixed this; 0.15 included the CRLF in the body).
+        assert_eq!(part.get_body_raw().unwrap(), b"PDFBYTES");
         assert!(find_part(&mail, "other.pdf").is_none());
     }
 }

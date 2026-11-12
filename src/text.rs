@@ -9,7 +9,12 @@ pub fn extract_body(eml: &[u8]) -> String {
     let mut plain: Option<String> = None;
     let mut html: Option<String> = None;
     collect(&mail, &mut plain, &mut html);
-    plain.unwrap_or_else(|| html.map_or_else(String::new, |h| html2text::from_read(h.as_bytes(), 2000)))
+    plain.unwrap_or_else(|| {
+        html.map_or_else(
+            String::new,
+            |h| html2text::from_read(h.as_bytes(), 2000).unwrap_or_default(),
+        )
+    })
 }
 
 fn collect(part: &ParsedMail, plain: &mut Option<String>, html: &mut Option<String>) {

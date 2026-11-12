@@ -55,7 +55,7 @@ mod tests {
     #[test]
     fn parses_export_timestamp() {
         let p = Path::new("/root/account/mail_20261009_070548");
-        assert_eq!(export_timestamp(p), Some(1791529548));
+        assert_eq!(export_timestamp(p), Some(1_791_529_548));
         assert_eq!(export_timestamp(Path::new("/root/canonical")), None);
         assert_eq!(export_timestamp(Path::new("/root/a/mail_abc")), None);
     }

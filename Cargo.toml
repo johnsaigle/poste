@@ -7,20 +7,20 @@ description = "Local search and management layer over Proton Mail exports"
 [dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.42", features = ["bundled"] }
 sqlite-vec = "0.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 walkdir = "2"
-mailparse = "0.15"
-html2text = "0.12"
+mailparse = "0.18"
+html2text = "0.17"
 chrono = "0.4"
-dirs = "6"
-toml = "0.8"
+dirs = "7"
+toml = "1"
 
 [dev-dependencies]
 tempfile = "3"
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.42", features = ["bundled"] }
 
 # --- scaffold ---
 [profile.dev]

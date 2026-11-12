@@ -207,7 +207,7 @@ fn attach_list_and_get() {
     assert!(written.exists(), "not extracted: {out}");
     assert_eq!(
         std::fs::read(&written).unwrap(),
-        b"%PDF-1.4 fixture attachment bytes\n"
+        b"%PDF-1.4 fixture attachment bytes" // no trailing CRLF: the CRLF before a MIME boundary belongs to the boundary (mailparse >= 0.16)
     );
 
     // Second extraction collides -> -1 suffix
@@ -335,7 +335,9 @@ fn attach_get_sanitizes_traversal_filename() {
 
     // Landed inside out_dir under its sanitized basename...
     let written = out_dir.join("evil.sh");
-    assert_eq!(std::fs::read(&written).unwrap(), b"#!/bin/sh\nrm -rf /\n\n");
+    // Body ends with one \n (from the fixture); the pre-boundary CRLF is no
+    // longer part of the body (mailparse >= 0.16, RFC 2046 §5.1.1).
+    assert_eq!(std::fs::read(&written).unwrap(), b"#!/bin/sh\nrm -rf /\n");
     // ...and nothing escaped the output dir.
     assert!(!tmp.path().join("evil.sh").exists());
     assert!(!tmp.path().parent().unwrap().join("evil.sh").exists());
